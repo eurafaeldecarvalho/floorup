@@ -4,3 +4,5 @@
 *.swp
 /bench/cache
 .cache
+__pycache__/
+*.pyc
