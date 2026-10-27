@@ -1,0 +1,30 @@
+[package]
+name = "uv-bump"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "MIT"
+description = "Bump pyproject.toml dependency bounds to the latest PyPI release without touching formatting"
+repository = "https://github.com/eurafaeldecarvalho/uv-bump"
+readme = "README.md"
+keywords = ["uv", "pyproject", "pypi", "dependencies"]
+categories = ["command-line-utilities", "development-tools"]
+exclude = ["tests/fixtures/real", "bench"]
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+pep440_rs = "=0.7.3"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-webpki-roots", "gzip"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+similar = "2.6"
+thiserror = "1"
+
+toml_edit = "0.22.22"
+
+[dev-dependencies]
+proptest = "1.5"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
