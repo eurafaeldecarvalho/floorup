@@ -1,0 +1,46 @@
+# header comment with requests>=9.9.9 and odd spacing
+[project]
+name = "odd"
+version = "0.0.1"  # not a dependency
+description = "keep requests>=1.0.0 in prose"
+authors = [{ name = "A", email = "a@b.c" }]
+requires-python = ">=3.11"
+dependencies = ["requests>=2.28.0", "flask==2.3.2",] # inline array, trailing comma
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0", # comment
+	"httpx[http2] >=0.27.0",
+    'tomli>=2.0.1',
+    "django (>=4.2, <5.0)",
+    "packaging~=2.2",
+    "idna > 2.0",
+    "charset-normalizer>=3.0.0,!=3.1.0",
+    "brotli; platform_python_implementation == 'CPython'",
+    "legacy=1.2.3",
+    "pinned===arbitrary",
+    "repo @ git+https://example.com/repo.git",
+    """
+    multiline>=1.0
+    """,
+]
+
+[dependency-groups]
+typing = [
+    { include-group = "dev" },
+    "mypy>=1.8",
+]
+dev = [
+    "ruff>=0.4.0",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "pre-commit>=3.0",
+]
+
+[build-system]
+requires = ["hatchling>=1.20,<2", "setuptools"]
+
+[tool.other]
+note = "flask>=9 stays"
