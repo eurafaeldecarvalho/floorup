@@ -3,10 +3,11 @@
 #![forbid(unsafe_code)]
 
 use clap::{Parser, ValueEnum};
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use uv_bump::{
     bump_str, default_cache_dir, unified, Options, Outcome, PypiConfig, PypiIndex, VersionSource,
@@ -183,7 +184,8 @@ fn run() -> Result<bool, String> {
     }
 
     if cli.dry_run || cli.check {
-        if cli.dry_run && changed {
+        // JSON already carries the diff. A second copy would make stdout invalid JSON.
+        if cli.dry_run && changed && cli.format == Format::Text {
             print!("{diff}");
         }
         return Ok(!cli.check || !changed);
@@ -206,11 +208,19 @@ fn options_from(cli: &Cli) -> Options {
         allow_pre: cli.pre,
         bump_pins: cli.bump_pins,
         expand_compatible: cli.expand_compatible,
-        include_packages: cli.packages.iter().cloned().collect(),
-        exclude_packages: cli.exclude.iter().cloned().collect(),
-        include_groups: cli.groups.iter().cloned().collect(),
-        exclude_groups: cli.exclude_groups.iter().cloned().collect(),
+        include_packages: tokens(&cli.packages),
+        exclude_packages: tokens(&cli.exclude),
+        include_groups: tokens(&cli.groups),
+        exclude_groups: tokens(&cli.exclude_groups),
     }
+}
+
+fn tokens(values: &[String]) -> std::collections::BTreeSet<String> {
+    values
+        .iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect()
 }
 
 fn resolve_path(path: &Path) -> Result<PathBuf, String> {
@@ -284,23 +294,82 @@ fn write_json(path: &Path, outcome: &Outcome, elapsed: Duration, diff: &str) -> 
     Ok(())
 }
 
+static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
 fn write_atomic(path: &Path, contents: &str) -> Result<(), String> {
-    let parent = path
+    // Replace the file that a symlink points at. Renaming over the symlink
+    // itself would turn it into a regular file and leave the target stale.
+    let dest = resolve_dest(path)?;
+    let parent = dest
         .parent()
         .filter(|dir| !dir.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    let mut tmp_name = path
+    let file_name = dest
         .file_name()
         .map(|name| name.to_os_string())
         .unwrap_or_else(|| "pyproject.toml".into());
-    tmp_name.push(".uv-bump.tmp");
-    let tmp = parent.join(tmp_name);
-    fs::write(&tmp, contents).map_err(|err| format!("writing {}: {err}", tmp.display()))?;
-    if let Ok(meta) = fs::metadata(path) {
-        let _ = fs::set_permissions(&tmp, meta.permissions());
+    let perms = fs::metadata(&dest)
+        .map_err(|err| format!("reading metadata of {}: {err}", dest.display()))?
+        .permissions();
+
+    for _ in 0..64 {
+        let n = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+        let mut tmp_name = std::ffi::OsString::from(".");
+        tmp_name.push(&file_name);
+        tmp_name.push(format!(".uv-bump.{}.{n}.tmp", std::process::id()));
+        let tmp = parent.join(tmp_name);
+        // `create_new` is O_EXCL: an existing symlink is not followed.
+        let file = match OpenOptions::new().write(true).create_new(true).open(&tmp) {
+            Ok(file) => file,
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(format!("writing {}: {err}", tmp.display())),
+        };
+        let wrote = (|| -> Result<(), String> {
+            write_temp(file, &tmp, contents, &perms)?;
+            fs::rename(&tmp, &dest)
+                .map_err(|err| format!("replacing {}: {err}", dest.display()))?;
+            Ok(())
+        })();
+        if let Err(err) = wrote {
+            let _ = fs::remove_file(&tmp);
+            return Err(err);
+        }
+        return Ok(());
     }
-    fs::rename(&tmp, path).map_err(|err| format!("replacing {}: {err}", path.display()))?;
+    Err(format!(
+        "writing {}: could not create a temporary file",
+        dest.display()
+    ))
+}
+
+fn write_temp(
+    mut file: fs::File,
+    tmp: &Path,
+    contents: &str,
+    perms: &fs::Permissions,
+) -> Result<(), String> {
+    // Tighten permissions before the body is written so a 0600 pyproject is
+    // never briefly world-readable, and fail rather than rename a looser file.
+    file.set_permissions(perms.clone())
+        .map_err(|err| format!("preserving permissions on {}: {err}", tmp.display()))?;
+    file.write_all(contents.as_bytes())
+        .map_err(|err| format!("writing {}: {err}", tmp.display()))?;
+    file.sync_all()
+        .map_err(|err| format!("writing {}: {err}", tmp.display()))?;
     Ok(())
+}
+
+fn resolve_dest(path: &Path) -> Result<PathBuf, String> {
+    match fs::canonicalize(path) {
+        Ok(dest) => Ok(dest),
+        Err(err) => {
+            if path.is_symlink() {
+                Err(format!("resolving symlink {}: {err}", path.display()))
+            } else {
+                Ok(path.to_path_buf())
+            }
+        }
+    }
 }
 
 fn uv_lock(project_dir: &Path) -> Result<(), String> {
@@ -319,5 +388,82 @@ fn uv_lock(project_dir: &Path) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("uv lock exited with {status}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::{symlink, PermissionsExt};
+
+    #[test]
+    fn atomic_write_keeps_mode_and_does_not_follow_symlinks() {
+        let dir = std::env::temp_dir().join(format!("uv-bump-atomic-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let path = dir.join("pyproject.toml");
+        fs::write(&path, "old\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+        write_atomic(&path, "new\n").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new\n");
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+
+        let real = dir.join("real.toml");
+        fs::write(&real, "real\n").unwrap();
+        fs::set_permissions(&real, fs::Permissions::from_mode(0o600)).unwrap();
+        let link = dir.join("link.toml");
+        symlink(&real, &link).unwrap();
+        write_atomic(&link, "through\n").unwrap();
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(fs::read_to_string(&real).unwrap(), "through\n");
+        assert_eq!(fs::read_to_string(&link).unwrap(), "through\n");
+        assert_eq!(
+            fs::metadata(&real).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        let secret = dir.join("secret");
+        fs::write(&secret, "SECRET").unwrap();
+        symlink(&secret, dir.join("pyproject.toml.uv-bump.tmp")).unwrap();
+        let n = 50_000u64;
+        TEMP_SEQ.store(n, Ordering::SeqCst);
+        let planted = dir.join(format!(
+            ".plant.toml.uv-bump.{}.{n}.tmp",
+            std::process::id()
+        ));
+        symlink(&secret, &planted).unwrap();
+        let plant = dir.join("plant.toml");
+        fs::write(&plant, "plant\n").unwrap();
+        fs::set_permissions(&plant, fs::Permissions::from_mode(0o604)).unwrap();
+        write_atomic(&plant, "grown\n").unwrap();
+        assert_eq!(fs::read_to_string(&secret).unwrap(), "SECRET");
+        assert_eq!(fs::read_to_string(&plant).unwrap(), "grown\n");
+        assert_eq!(
+            fs::metadata(&plant).unwrap().permissions().mode() & 0o777,
+            0o604
+        );
+        assert!(planted.symlink_metadata().unwrap().file_type().is_symlink());
+        assert!(dir
+            .join("pyproject.toml.uv-bump.tmp")
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        let names: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+        assert_eq!(
+            names.len(),
+            2,
+            "only the symlinks planted by the test should remain: {names:?}"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -62,31 +62,8 @@ pub struct Policy {
 }
 
 pub fn decide(req: &Requirement, releases: Option<Lookup>, policy: Policy) -> Decision {
-    if req.is_url {
-        return Decision::Note(
-            Reason::DirectReference,
-            "direct URL, path, or VCS requirement".to_string(),
-        );
-    }
-    if req.specifiers.iter().any(|s| s.op == Op::Arbitrary) {
-        return Decision::Note(
-            Reason::ArbitraryEquality,
-            "=== is an arbitrary string match and is not rewritten".to_string(),
-        );
-    }
-    if let Err(message) = validate_specifiers(req) {
-        return Decision::Note(Reason::Unparseable, message);
-    }
-
-    let pinned = req.specifiers.iter().any(|s| s.op.is_pin());
-    if pinned && !policy.bump_pins {
-        return Decision::Note(
-            Reason::ExactPin,
-            "exact pin left unchanged; pass --bump-pins to rewrite ==".to_string(),
-        );
-    }
-    if !req.specifiers.iter().any(|s| is_rewritten_floor(s, policy)) {
-        return Decision::Unbounded;
+    if let Some(decision) = classify(req, policy) {
+        return decision;
     }
 
     let releases = match releases {
@@ -141,6 +118,47 @@ pub enum Lookup {
     Failed(String),
 }
 
+/// Decisions that do not need a version list: skips, pins, and bare names.
+///
+/// `None` means a release list is required.
+pub(crate) fn classify(req: &Requirement, policy: Policy) -> Option<Decision> {
+    if req.is_url {
+        return Some(Decision::Note(
+            Reason::DirectReference,
+            "direct URL, path, or VCS requirement".to_string(),
+        ));
+    }
+    if req.specifiers.iter().any(|s| s.op == Op::Arbitrary) {
+        return Some(Decision::Note(
+            Reason::ArbitraryEquality,
+            "=== is an arbitrary string match and is not rewritten".to_string(),
+        ));
+    }
+    if let Err(message) = validate_specifiers(req) {
+        return Some(Decision::Note(Reason::Unparseable, message));
+    }
+    if req.specifiers.iter().any(is_exact_pin) && !policy.bump_pins {
+        return Some(Decision::Note(
+            Reason::ExactPin,
+            "exact pin left unchanged; pass --bump-pins to rewrite ==".to_string(),
+        ));
+    }
+    if !req.specifiers.iter().any(|s| is_rewritten_floor(s, policy)) {
+        if req.specifiers.iter().any(|s| s.op.is_pin()) {
+            return Some(Decision::Note(
+                Reason::ExactPin,
+                "wildcard equality (==1.*) is left unchanged".to_string(),
+            ));
+        }
+        return Some(Decision::Unbounded);
+    }
+    None
+}
+
+fn is_exact_pin(spec: &Specifier) -> bool {
+    spec.op.is_pin() && !spec.star
+}
+
 fn validate_specifiers(req: &Requirement) -> Result<(), String> {
     for spec in &req.specifiers {
         if spec.op == Op::Arbitrary {
@@ -157,7 +175,8 @@ fn validate_specifiers(req: &Requirement) -> Result<(), String> {
 fn is_rewritten_floor(spec: &Specifier, policy: Policy) -> bool {
     match spec.op {
         Op::GtEq | Op::Gt | Op::Compatible => true,
-        Op::Eq | Op::EqLegacy => policy.bump_pins,
+        // `==1.*` is a prefix constraint, not an exact pin.
+        Op::Eq | Op::EqLegacy => policy.bump_pins && !spec.star,
         _ => false,
     }
 }
@@ -211,9 +230,10 @@ fn pick_newer<'a>(a: &'a Release, b: &'a Release) -> &'a Release {
 fn within_ceilings(req: &Requirement, cand: &Version, policy: Policy, allow_pre: bool) -> bool {
     for spec in &req.specifiers {
         let ok = match spec.op {
-            Op::Lt => cmp_local(cand, &spec.version) == Ordering::Less,
+            Op::Lt => satisfies_lt(&spec.version, cand),
             Op::LtEq => cmp_local(cand, &spec.version) != Ordering::Greater,
-            Op::NotEq => not_equal(spec, cand, allow_pre),
+            Op::NotEq => not_equal(spec, cand),
+            Op::Eq | Op::EqLegacy if spec.star => prefix_match(&spec.version, cand),
             Op::Compatible if !policy.expand_compatible => compatible(spec, cand, allow_pre),
             _ => true,
         };
@@ -229,11 +249,12 @@ fn meets_floors(req: &Requirement, cand: &Version, policy: Policy, strict_greate
         let ok = match spec.op {
             Op::GtEq => cmp_local(cand, &spec.version) != Ordering::Less,
             Op::Gt => {
-                let ord = cmp_local(cand, &spec.version);
                 if strict_greater {
-                    ord == Ordering::Greater
+                    satisfies_gt(&spec.version, cand)
                 } else {
-                    ord != Ordering::Less
+                    // Used only to detect "already current": `>` may not move
+                    // if the newest release is the one `>` already names.
+                    cmp_local(cand, &spec.version) != Ordering::Less
                 }
             }
             Op::Compatible if policy.expand_compatible => {
@@ -251,19 +272,49 @@ fn meets_floors(req: &Requirement, cand: &Version, policy: Policy, strict_greate
     true
 }
 
+/// `>V` does not match a post-release or local build of `V` unless `V` is itself a post-release.
+///
+/// PEP 440 exclusive ordered comparison. Raw `>` would treat `1.0.post1` as newer than `1.0`
+/// and the rewrite to `>=` would start allowing a release the old bound excluded.
+fn satisfies_gt(spec: &Version, cand: &Version) -> bool {
+    if same_release(spec, cand) && (cand.is_local() || (!spec.is_post() && cand.is_post())) {
+        return false;
+    }
+    cmp_local(cand, spec) == Ordering::Greater
+}
+
+/// `<V` does not match a pre-release or dev release of `V` unless `V` is itself one.
+///
+/// `<2.0.0a5` still matches earlier pre-releases of `2.0.0` (`2.0.0a1`).
+fn satisfies_lt(spec: &Version, cand: &Version) -> bool {
+    if same_release(spec, cand) && !spec.any_prerelease() && cand.any_prerelease() {
+        return false;
+    }
+    cmp_local(cand, spec) == Ordering::Less
+}
+
+fn same_release(left: &Version, right: &Version) -> bool {
+    if left.epoch() != right.epoch() {
+        return false;
+    }
+    let a = left.release();
+    let b = right.release();
+    let width = a.len().max(b.len());
+    (0..width).all(|index| a.get(index).copied().unwrap_or(0) == b.get(index).copied().unwrap_or(0))
+}
+
 fn cmp_local(cand: &Version, spec: &Version) -> Ordering {
     cand.clone().without_local().cmp(spec)
 }
 
-fn not_equal(spec: &Specifier, cand: &Version, allow_pre: bool) -> bool {
+fn not_equal(spec: &Specifier, cand: &Version) -> bool {
     if spec.star {
-        // `!=2.*` excludes the whole series, including pre-releases when
-        // those are eligible. `VersionSpecifier` hides pre-releases unless
-        // the specifier itself names one, which would let `2.0rc1` through.
-        if allow_pre || spec.version.any_prerelease() {
-            return !prefix_match(&spec.version, cand);
-        }
-        specifier_contains(spec, cand)
+        // `!=1.0.*` excludes `1` and `1.0.0` (missing components pad with
+        // zeros) but not `1.1`. Pre-releases of a matching prefix are excluded
+        // too; `VersionSpecifier` drops them unless the specifier names one,
+        // and its prefix check treats a shorter candidate as a match whenever
+        // the shared prefix is equal (`==1.0.1.*` would match `1.0`).
+        !prefix_match(&spec.version, cand)
     } else {
         cmp_local(cand, &spec.version) != Ordering::Equal
     }
@@ -287,39 +338,31 @@ fn compatible_series(spec: &Specifier, cand: &Version) -> bool {
     if release.len() < 2 || cand.epoch() != spec.version.epoch() {
         return false;
     }
-    let prefix_len = release.len() - 1;
-    let cand_rel = cand.release();
-    if cand_rel.len() < prefix_len {
-        return false;
-    }
-    cand_rel
+    release_has_prefix(cand.release(), &release[..release.len() - 1])
+}
+
+/// `prefix` matches `release` with missing components treated as zeros.
+///
+/// `==1.0.*` matches `1` and `1.0.2`. `==1.0.1.*` does not match `1.0`
+/// (`1.0.0`). `==2.2.*` does not match `2`.
+fn release_has_prefix(release: &[u64], prefix: &[u64]) -> bool {
+    prefix
         .iter()
-        .zip(release.iter().take(prefix_len))
-        .all(|(left, right)| left == right)
+        .enumerate()
+        .all(|(index, component)| release.get(index).copied().unwrap_or(0) == *component)
 }
 
 fn prefix_match(spec: &Version, cand: &Version) -> bool {
-    if spec.epoch() != cand.epoch() {
-        return false;
-    }
-    let prefix = spec.release();
-    let release = cand.release();
-    if release.len() < prefix.len() {
-        return false;
-    }
-    release
-        .iter()
-        .zip(prefix.iter())
-        .all(|(left, right)| left == right)
+    spec.epoch() == cand.epoch() && release_has_prefix(cand.release(), spec.release())
 }
 
 /// A truncated `~=` spelling such as `~=2.33` does not admit `2.33.0rc1`.
 /// Skip those candidates so `--pre` cannot narrow `~=2.28` (`==2.*`) into
 /// `~=2.33.0rc1` (`==2.33.*`) just to name the pre-release.
-fn compatible_spelling_admits(req: &Requirement, rel: &Release, policy: Policy) -> bool {
-    if policy.expand_compatible {
-        return true;
-    }
+fn compatible_spelling_admits(req: &Requirement, rel: &Release, _policy: Policy) -> bool {
+    // `--expand-compatible` may leave the series, but the written `~=` still
+    // has the original component count and must admit the chosen release.
+    // `~=2.28` cannot become `~=3.0` to mean `3.0.0rc1`.
     for spec in &req.specifiers {
         if spec.op != Op::Compatible {
             continue;
@@ -343,13 +386,7 @@ fn admits_compatible(formatted: &str, cand: &Version) -> bool {
     if release.len() < 2 || cand.epoch() != written.epoch() {
         return false;
     }
-    let prefix_len = release.len() - 1;
-    let cand_rel = cand.release();
-    cand_rel.len() >= prefix_len
-        && cand_rel
-            .iter()
-            .zip(release.iter().take(prefix_len))
-            .all(|(left, right)| left == right)
+    release_has_prefix(cand.release(), &release[..release.len() - 1])
 }
 
 fn specifier_contains(spec: &Specifier, cand: &Version) -> bool {
@@ -371,7 +408,7 @@ fn rewrite_specifier(spec: &Specifier, target: &Release, policy: Policy) -> Opti
             format!("{}{}{}", spec.op.write(), spec.ws, target.version_text)
         }
         Op::Gt => {
-            if cmp_local(&target.version, &spec.version) != Ordering::Greater {
+            if !satisfies_gt(&spec.version, &target.version) {
                 return None;
             }
             format!(">={}{}", spec.ws, target.version_text)
@@ -642,6 +679,175 @@ mod tests {
         assert_eq!(
             bump_text("pkg~=1.0.0rc1", &["1.0.0rc2", "1.0.0", "1.1.0"], stable),
             "pkg~=1.0.0"
+        );
+    }
+
+    #[test]
+    fn greater_than_does_not_adopt_a_post_release_of_the_same_version() {
+        let pol = policy(false, false, false);
+        assert_eq!(
+            bump_text("pkg>1.0", &["1.0.0", "1.0.0.post1"], pol),
+            "pkg>1.0"
+        );
+        assert_eq!(bump_text("pkg>1.0.0", &["1.0.post1"], pol), "pkg>1.0.0");
+        assert_eq!(
+            bump_text("pkg>1", &["1.0.0.post1", "1.0.1"], pol),
+            "pkg>=1.0.1"
+        );
+        assert_eq!(
+            bump_text("pkg>1.0.post1", &["1.0.0.post2"], pol),
+            "pkg>=1.0.0.post2"
+        );
+    }
+
+    #[test]
+    fn less_than_excludes_prereleases_of_the_cap() {
+        let pre = policy(false, false, true);
+        assert_eq!(
+            bump_text("pkg>=1,<2", &["1.5.0", "2.0.0a1", "2.0.0.dev1"], pre),
+            "pkg>=1.5.0,<2"
+        );
+        assert_eq!(
+            bump_text(
+                "pkg>=1.0.0a1,<2.0.0a5",
+                &["1.0.0a1", "2.0.0a4", "2.0.0a5"],
+                pre
+            ),
+            "pkg>=2.0.0a4,<2.0.0a5"
+        );
+        // A pre-release anywhere in the specifier opts in, same as --pre.
+        let stable = policy(false, false, false);
+        assert_eq!(
+            bump_text("pkg>=0.65b0,<1", &["0.66.0", "0.70.0b1", "1.0.0a1"], stable),
+            "pkg>=0.70.0b1,<1"
+        );
+    }
+
+    #[test]
+    fn star_exclusion_pads_missing_components() {
+        let pol = policy(false, false, false);
+        assert_eq!(
+            bump_text("pkg>=0.5,<1.1,!=1.0.1.*", &["1.0", "1.0.1", "1.0.1.1"], pol),
+            "pkg>=1.0,<1.1,!=1.0.1.*"
+        );
+        assert_eq!(
+            bump_text("pkg>=0.1,<1.1,!=1.0.0.*", &["1.0", "1.0.0"], pol),
+            "NOTE:no_eligible_release"
+        );
+        let pre = policy(false, false, true);
+        assert_eq!(
+            bump_text("pkg>=0.1,<1.1,!=1.0.*", &["1", "1.0.5", "1.0.0rc1"], pre),
+            "NOTE:no_eligible_release"
+        );
+        assert_eq!(
+            bump_text(
+                "pkg>=1,<2,!=1.5",
+                &["1.4.0", "1.5.0", "1.6.0", "2.0.0"],
+                pol
+            ),
+            "pkg>=1.6.0,<2,!=1.5"
+        );
+    }
+
+    #[test]
+    fn wildcard_equality_is_not_an_exact_pin() {
+        let pins = policy(true, false, false);
+        assert_eq!(
+            bump_text("pkg==1.*", &["1.2.0", "2.0.0"], pins),
+            "NOTE:exact_pin"
+        );
+        assert_eq!(
+            bump_text("pkg=1.*", &["1.2.0", "2.0.0"], pins),
+            "NOTE:exact_pin"
+        );
+        assert_eq!(
+            bump_text("pkg==1.2.3", &["1.2.3", "2.0.0"], pins),
+            "pkg==2.0.0"
+        );
+        assert_eq!(bump_text("pkg=1.2.3", &["9.0.0"], pins), "pkg=9.0.0");
+        assert_eq!(
+            bump_text("pkg===1.2.3", &["9.0.0"], pins),
+            "NOTE:arbitrary_equality"
+        );
+        let pol = policy(false, false, false);
+        assert_eq!(
+            bump_text("pkg>=1.0,==1.*", &["1.2.0", "1.9.5", "2.0.0"], pol),
+            "pkg>=1.9.5,==1.*"
+        );
+        assert_eq!(
+            bump_text("pkg==1.2.*,>=1", &["1.2.5", "1.3.0", "2.0.0"], pol),
+            "pkg==1.2.*,>=1.2.5"
+        );
+    }
+
+    #[test]
+    fn compatible_spelling_admits_short_and_prerelease_targets() {
+        let pol = policy(false, false, false);
+        assert_eq!(bump_text("pkg~=1.0.0", &["1"], pol), "pkg~=1.0.0");
+        assert_eq!(
+            bump_text("pkg~=0.1.0", &["1"], pol),
+            "NOTE:no_eligible_release"
+        );
+        let expand_pre = policy(false, true, true);
+        assert_eq!(
+            bump_text("pkg~=2.28", &["2.32.3", "3.0.0rc1"], expand_pre),
+            "pkg~=2.32"
+        );
+        assert_eq!(
+            bump_text("pkg~=2.28", &["3.0.0rc1"], expand_pre),
+            "NOTE:no_eligible_release"
+        );
+        assert_eq!(
+            bump_text(
+                "pkg~=1.4.2",
+                &["1.4.8", "2.3.1"],
+                policy(false, true, false)
+            ),
+            "pkg~=2.3.1"
+        );
+        assert_eq!(
+            bump_text("pkg~=2.28", &["2.28.1", "2.32.3"], pol),
+            "pkg~=2.32"
+        );
+        assert_eq!(
+            bump_text("pkg~=2.28.1", &["2.28.5", "2.32.3"], pol),
+            "pkg~=2.28.5"
+        );
+    }
+
+    #[test]
+    fn epochs_locals_and_whitespace() {
+        let pol = policy(false, false, false);
+        assert_eq!(
+            bump_text("pkg>=1!1.0", &["2.0.0", "1!1.4.0", "1!2.0.0"], pol),
+            "pkg>=1!2.0.0"
+        );
+        assert_eq!(
+            bump_text("pkg~=1!1.2", &["1!1.9.1", "1!2.0.0", "2.0.0"], pol),
+            "pkg~=1!1.9"
+        );
+        assert_eq!(
+            bump_text("pkg>=1.0,<1!1", &["2.0.0", "1!0.5.0"], pol),
+            "pkg>=1!0.5.0,<1!1"
+        );
+        let mut local = rels(&["0.9.0", "2.0.0+cpu"]);
+        local[1].version_text = "2.0.0+cpu".to_string();
+        let req = parse_requirement("pkg>=1.0").unwrap();
+        match decide(&req, Some(Lookup::Found(local)), pol) {
+            Decision::Note(reason, _) => assert_eq!(reason, Reason::NoEligibleRelease),
+            other => panic!("local release must not be selected: {other:?}"),
+        }
+        assert_eq!(
+            bump_text(
+                "pkg  >=  1.0 , < 2 , != 1.5",
+                &["1.4.0", "1.5.0", "1.6.0"],
+                pol
+            ),
+            "pkg  >=  1.6.0 , < 2 , != 1.5"
+        );
+        assert_eq!(
+            bump_text("pkg~=1", &["1.2.0", "2.0.0"], pol),
+            "NOTE:unparseable"
         );
     }
 }

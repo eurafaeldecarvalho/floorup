@@ -5,8 +5,10 @@ use crate::Error;
 use pep440_rs::Version;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -269,12 +271,34 @@ impl PypiIndex {
         let Ok(body) = serde_json::to_vec(entry) else {
             return;
         };
-        let tmp = path.with_extension("json.tmp");
-        if fs::write(&tmp, body).is_ok() {
-            let _ = fs::rename(&tmp, &path);
+        // A predictable `name.json.tmp` is followed by `fs::write` when an
+        // attacker plants a symlink. Create a unique file with O_EXCL instead.
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(name);
+        for _ in 0..64 {
+            let n = CACHE_SEQ.fetch_add(1, Ordering::Relaxed);
+            let tmp = path.with_file_name(format!(".{file_name}.{}.{n}.tmp", std::process::id()));
+            let mut file = match OpenOptions::new().write(true).create_new(true).open(&tmp) {
+                Ok(file) => file,
+                Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(_) => return,
+            };
+            if file.write_all(&body).is_err() {
+                let _ = fs::remove_file(&tmp);
+                return;
+            }
+            if fs::rename(&tmp, &path).is_err() {
+                let _ = fs::remove_file(&tmp);
+                return;
+            }
+            return;
         }
     }
 }
+
+static CACHE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Serialize, Deserialize)]
 struct CacheEntry {
@@ -352,11 +376,14 @@ pub fn parse_pypi_json(body: &str) -> Result<Vec<Release>, String> {
 }
 
 pub fn json_endpoint(index: &str, name: &str) -> String {
-    let mut base = index.trim().trim_end_matches('/').to_string();
+    let trimmed = index.trim();
+    let cut = trimmed.find(['?', '#']).unwrap_or(trimmed.len());
+    let (path, suffix) = trimmed.split_at(cut);
+    let mut base = path.trim_end_matches('/').to_string();
     if let Some(stripped) = base.strip_suffix("/simple") {
         base = format!("{stripped}/pypi");
     }
-    format!("{base}/{}/json", path_segment(name))
+    format!("{base}/{}/json{suffix}", path_segment(name))
 }
 
 fn path_segment(name: &str) -> String {
@@ -372,14 +399,23 @@ fn path_segment(name: &str) -> String {
 }
 
 pub fn redact(url: &str) -> String {
-    let Some(scheme) = url.find("://") else {
+    let Some(scheme_end) = url.find("://") else {
         return url.to_string();
     };
-    let rest = &url[scheme + 3..];
-    match rest.find('@') {
-        Some(at) => format!("{}://***@{}", &url[..scheme], &rest[at + 1..]),
-        None => url.to_string(),
-    }
+    let rest = &url[scheme_end + 3..];
+    // Userinfo is the part of the authority before the last `@`. A password
+    // may itself contain `@`; the first `@` would leak the rest of it.
+    let auth_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..auth_end];
+    let Some(at) = authority.rfind('@') else {
+        return url.to_string();
+    };
+    format!(
+        "{}://***@{}{}",
+        &url[..scheme_end],
+        &authority[at + 1..],
+        &rest[auth_end..]
+    )
 }
 
 pub fn default_cache_dir() -> Option<PathBuf> {
@@ -435,6 +471,18 @@ mod tests {
             redact("https://user:token@example.com/pypi/requests/json"),
             "https://***@example.com/pypi/requests/json"
         );
+        assert_eq!(
+            redact("https://user:p@ss@example.com/simple/pkg/json"),
+            "https://***@example.com/simple/pkg/json"
+        );
+        assert_eq!(
+            json_endpoint("https://example.com/simple?token=a", "requests"),
+            "https://example.com/pypi/requests/json?token=a"
+        );
+        assert_eq!(
+            redact("https://example.com/pypi/pkg@2/json"),
+            "https://example.com/pypi/pkg@2/json"
+        );
     }
 
     #[test]
@@ -462,6 +510,49 @@ mod tests {
         assert!(!by_name("2.0.0rc1").yanked);
         assert!(releases.iter().all(|rel| rel.version_text != "3.0.0"));
         assert!(releases.iter().all(|rel| rel.version_text != "nope"));
+    }
+
+    #[test]
+    fn cache_write_does_not_follow_a_planted_temp_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir =
+            std::env::temp_dir().join(format!("uv-bump-cache-symlink-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let index = PypiIndex::new(PypiConfig {
+            index_url: "https://pypi.org/pypi".into(),
+            cache_dir: Some(dir.clone()),
+            ttl: Duration::from_secs(3600),
+            timeout: Duration::from_secs(5),
+            jobs: 1,
+            offline: true,
+            keep_going: false,
+        })
+        .unwrap();
+        let path = cache_path(&dir, "https://pypi.org/pypi", "requests");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let secret = dir.join("secret");
+        fs::write(&secret, "SECRET").unwrap();
+        symlink(&secret, path.with_extension("json.tmp")).unwrap();
+        CACHE_SEQ.store(7, Ordering::SeqCst);
+        let planted = path.with_file_name(format!(".requests.json.{}.7.tmp", std::process::id()));
+        symlink(&secret, &planted).unwrap();
+
+        let entry = CacheEntry::from_releases(&[Release::parse("2.32.3").unwrap()]);
+        index.write_cache("requests", &entry);
+
+        assert_eq!(fs::read_to_string(&secret).unwrap(), "SECRET");
+        assert!(planted.symlink_metadata().unwrap().file_type().is_symlink());
+        assert!(path
+            .with_extension("json.tmp")
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        let cached = fs::read_to_string(&path).unwrap();
+        assert!(cached.contains("2.32.3"), "{cached}");
+        assert!(!path.symlink_metadata().unwrap().file_type().is_symlink());
     }
 
     #[test]

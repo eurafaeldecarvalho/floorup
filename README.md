@@ -35,20 +35,21 @@ The newest release that still satisfies the ceilings and exclusions is written i
 | Specifier | Result |
 | --- | --- |
 | `>=2.28` | `>=` the newest eligible release, full version text (`>=2.32.3`, not `>=2.32`) |
-| `>2.28` | `>=` that release, and only when it is strictly newer. `>2.32.3` stays put when `2.32.3` is current, because `>2.32.3` would exclude it |
+| `>2.28` | `>=` that release, and only when it is strictly newer and still satisfies the original `>`. A post-release of the same version does not (`>1.0` stays put when `1.0.post1` is newest). `>2.32.3` stays put when `2.32.3` is current |
 | `~=2.28` | stays inside the same series and keeps the component count: `~=2.32` (`==2.*`). `~=2.28.1` becomes the newest `2.28.x` |
-| `~=2.28` with `--expand-compatible` | the absolute latest release, still at the original component count |
-| `==1.2.3`, `=1.2.3`, `==1.*` | left alone. `--bump-pins` rewrites `==` and legacy `=` |
+| `~=2.28` with `--expand-compatible` | the absolute latest release that the original component count can still spell |
+| `==1.2.3`, `=1.2.3` | left alone. `--bump-pins` rewrites those exact pins |
+| `==1.*`, `=1.*` | left alone, including with `--bump-pins`. A wildcard is a prefix constraint, not an exact pin |
 | `===1.2.3` | never rewritten |
-| `<5`, `<=2` | not widened. The floor moves up to the newest release that still fits |
-| `!=2.8` | kept. The chosen release must satisfy it |
+| `<5`, `<=2` | not widened. The floor moves up to the newest release that still fits. `<2` does not select `2.0.0a1` or `2.0.0.dev1` |
+| `!=2.8`, `!=1.0.*` | kept. The chosen release must satisfy it. `!=1.0.*` also excludes `1` (missing components pad with zeros); `!=1.0.1.*` does not exclude `1.0` |
 | no specifier | left alone |
 
 `>=2.32` is already current when the published release is `2.32.0` (PEP 440 treats them as equal).
 
 Pre-releases and development releases are ignored unless you pass `--pre`, or the specifier already names one (`>=0.65b0`). Yanked releases are ignored when every uploaded file is yanked. Releases with no files are ignored. Local versions (`1.2.3+local`) are ignored.
 
-With `--pre`, a pre-release is written into `~=` only when that spelling still admits it and does not narrow the series. `~=2.28.0` can become `~=2.28.5rc1`. `~=2.28` does not become `~=2.33.0rc1`, because that would turn `==2.*` into `==2.33.*`.
+With `--pre`, a pre-release is written into `~=` only when that spelling still admits it and does not narrow the series. The same admission check applies with `--expand-compatible`. `~=2.28.0` can become `~=2.28.5rc1`. `~=2.28` does not become `~=2.33.0rc1` or `~=3.0` meaning `3.0.0rc1`, because that spelling does not admit the pre-release.
 
 ## Filters
 

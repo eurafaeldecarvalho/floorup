@@ -20,8 +20,8 @@ pub use pypi::{
 };
 
 use edit::locate;
-use parse::{parse_requirement, Op, Requirement};
-use policy::{decide, Decision, Lookup, Policy};
+use parse::{parse_requirement, Requirement};
+use policy::{classify, decide, Decision, Lookup, Policy};
 use serde::Serialize;
 use std::collections::BTreeSet;
 
@@ -76,7 +76,18 @@ pub struct Outcome {
 /// On success the returned document is the original text with specifier slices
 /// replaced. Nothing is written to disk.
 pub fn bump_str(text: &str, index: &dyn VersionSource, opts: &Options) -> Result<Outcome, Error> {
-    let located = locate(text)?;
+    // Notepad and some Windows editors write a UTF-8 BOM. TOML rejects it,
+    // but the rest of the file is ordinary text; keep the mark and edit the body.
+    let bom_len = if text.starts_with('\u{feff}') {
+        '\u{feff}'.len_utf8()
+    } else {
+        0
+    };
+    let mut located = locate(&text[bom_len..])?;
+    for item in &mut located {
+        item.value_span.start += bom_len;
+        item.value_span.end += bom_len;
+    }
     let policy = Policy {
         allow_pre: opts.allow_pre,
         bump_pins: opts.bump_pins,
@@ -160,11 +171,7 @@ pub fn bump_str(text: &str, index: &dyn VersionSource, opts: &Options) -> Result
         // Requirements that do not need a lookup still go through `decide`,
         // which classifies pins, bare names, and direct references. Those
         // paths return before reading `lookup`.
-        let decision = if lookup.is_none() {
-            decide_without_lookup(&item.requirement, policy)
-        } else {
-            decide(&item.requirement, lookup, policy)
-        };
+        let decision = decide(&item.requirement, lookup, policy);
 
         match decision {
             Decision::Bump(decoded_edits) => {
@@ -230,42 +237,6 @@ pub fn bump_str(text: &str, index: &dyn VersionSource, opts: &Options) -> Result
     })
 }
 
-fn decide_without_lookup(req: &Requirement, policy: Policy) -> Decision {
-    // `decide` only reads the release list after it has classified skips.
-    // Passing an empty found-list would turn a pin into "no eligible release",
-    // so pins and bare names are classified here.
-    if req.is_url {
-        return Decision::Note(
-            policy::Reason::DirectReference,
-            "direct URL, path, or VCS requirement".to_string(),
-        );
-    }
-    if req.specifiers.iter().any(|spec| spec.op == Op::Arbitrary) {
-        return Decision::Note(
-            policy::Reason::ArbitraryEquality,
-            "=== is an arbitrary string match and is not rewritten".to_string(),
-        );
-    }
-    let pinned = req.specifiers.iter().any(|spec| spec.op.is_pin());
-    if pinned && !policy.bump_pins {
-        return Decision::Note(
-            policy::Reason::ExactPin,
-            "exact pin left unchanged; pass --bump-pins to rewrite ==".to_string(),
-        );
-    }
-    if !req.specifiers.iter().any(|spec| match spec.op {
-        Op::GtEq | Op::Gt | Op::Compatible => true,
-        Op::Eq | Op::EqLegacy => policy.bump_pins,
-        _ => false,
-    }) {
-        return Decision::Unbounded;
-    }
-    Decision::Note(
-        policy::Reason::LookupFailed,
-        "internal error: lookup was required".to_string(),
-    )
-}
-
 fn make_note(
     name: &str,
     group: &str,
@@ -285,17 +256,15 @@ fn make_note(
 }
 
 fn needs_lookup(req: &Requirement, opts: &Options) -> bool {
-    if req.is_url || req.specifiers.iter().any(|spec| spec.op == Op::Arbitrary) {
-        return false;
-    }
-    if req.specifiers.iter().any(|spec| spec.op.is_pin()) && !opts.bump_pins {
-        return false;
-    }
-    req.specifiers.iter().any(|spec| match spec.op {
-        Op::GtEq | Op::Gt | Op::Compatible => true,
-        Op::Eq | Op::EqLegacy => opts.bump_pins,
-        _ => false,
-    })
+    classify(
+        req,
+        Policy {
+            allow_pre: opts.allow_pre,
+            bump_pins: opts.bump_pins,
+            expand_compatible: opts.expand_compatible,
+        },
+    )
+    .is_none()
 }
 
 fn apply_decoded(decoded: &str, edits: &[policy::DecodedEdit]) -> String {

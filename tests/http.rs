@@ -274,3 +274,52 @@ fn cli_dry_run_check_and_write() {
     assert!(status.success());
     assert_eq!(std::fs::read_to_string(&excluded_path).unwrap(), original);
 }
+
+#[test]
+fn json_dry_run_is_one_document_and_lookup_failure_does_not_write() {
+    let server = Server::start();
+    let dir = temp_dir("json");
+    let path = dir.join("pyproject.toml");
+    let original = "[project]\nname='t'\nversion='0'\ndependencies=['requests>=1']\n";
+    std::fs::write(&path, original).unwrap();
+    let bin = env!("CARGO_BIN_EXE_uv-bump");
+
+    let dry = Command::new(bin)
+        .arg(&path)
+        .arg("--dry-run")
+        .arg("--format")
+        .arg("json")
+        .arg("--index-url")
+        .arg(&server.url)
+        .arg("--no-cache")
+        .arg("--package")
+        .arg(" requests ,")
+        .output()
+        .unwrap();
+    assert!(
+        dry.status.success(),
+        "{}",
+        String::from_utf8_lossy(&dry.stderr)
+    );
+    let stdout = String::from_utf8(dry.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|err| panic!("stdout was not one JSON value: {err}\n{stdout}"));
+    assert!(
+        parsed["diff"].as_str().unwrap().contains("requests>="),
+        "{parsed}"
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+
+    let bad = dir.join("bad.toml");
+    let bad_original = "[project]\nname='t'\nversion='0'\ndependencies=['requests>=1','boom>=1']\n";
+    std::fs::write(&bad, bad_original).unwrap();
+    let failed = Command::new(bin)
+        .arg(&bad)
+        .arg("--index-url")
+        .arg(&server.url)
+        .arg("--no-cache")
+        .output()
+        .unwrap();
+    assert_eq!(failed.status.code(), Some(2), "{failed:?}");
+    assert_eq!(std::fs::read_to_string(&bad).unwrap(), bad_original);
+}
