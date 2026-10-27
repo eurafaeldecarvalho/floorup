@@ -1,15 +1,15 @@
 //! Edge cases the golden files do not exercise.
 
-use std::collections::BTreeSet;
-use uv_bump::{
+use floorup::{
     bump_str, is_single_specifier, preserves_unrelated_bytes, MapIndex, Options, Release,
 };
+use std::collections::BTreeSet;
 
 fn project(deps: &str) -> String {
     format!("[project]\nname = \"demo\"\nversion = \"0.1.0\"\ndependencies = [\n{deps}\n]\n")
 }
 
-fn bump(text: &str, packages: &[(&str, &[&str])], opts: Options) -> uv_bump::Outcome {
+fn bump(text: &str, packages: &[(&str, &[&str])], opts: Options) -> floorup::Outcome {
     let mut index = MapIndex::new();
     for (name, versions) in packages {
         index.insert(name, versions);
@@ -17,7 +17,7 @@ fn bump(text: &str, packages: &[(&str, &[&str])], opts: Options) -> uv_bump::Out
     bump_str(text, &index, &opts).unwrap_or_else(|err| panic!("bump failed: {err}"))
 }
 
-fn assert_preserved(before: &str, outcome: &uv_bump::Outcome) {
+fn assert_preserved(before: &str, outcome: &floorup::Outcome) {
     assert!(
         preserves_unrelated_bytes(before, &outcome.updated, &outcome.edits),
         "unrelated bytes changed\nbefore: {before:?}\nafter: {:?}\nedits: {:?}",

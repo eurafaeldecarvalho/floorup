@@ -1,21 +1,21 @@
-//! Command line for `uv-bump`.
+//! Command line for `floorup`.
 
 #![forbid(unsafe_code)]
 
 use clap::{Parser, ValueEnum};
+use floorup::{
+    bump_str, default_cache_dir, unified, Options, Outcome, PypiConfig, PypiIndex, VersionSource,
+};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-use uv_bump::{
-    bump_str, default_cache_dir, unified, Options, Outcome, PypiConfig, PypiIndex, VersionSource,
-};
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "uv-bump",
+    name = "floorup",
     version,
     about = "Bump dependency bounds in pyproject.toml to the latest PyPI releases.",
     after_help = "\
@@ -123,7 +123,7 @@ fn main() -> ExitCode {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::from(1),
         Err(err) => {
-            eprintln!("uv-bump: {err}");
+            eprintln!("floorup: {err}");
             ExitCode::from(2)
         }
     }
@@ -316,7 +316,7 @@ fn write_atomic(path: &Path, contents: &str) -> Result<(), String> {
         let n = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
         let mut tmp_name = std::ffi::OsString::from(".");
         tmp_name.push(&file_name);
-        tmp_name.push(format!(".uv-bump.{}.{n}.tmp", std::process::id()));
+        tmp_name.push(format!(".floorup.{}.{n}.tmp", std::process::id()));
         let tmp = parent.join(tmp_name);
         // `create_new` is O_EXCL: an existing symlink is not followed.
         let file = match OpenOptions::new().write(true).create_new(true).open(&tmp) {
@@ -398,7 +398,7 @@ mod tests {
 
     #[test]
     fn atomic_write_keeps_mode_and_does_not_follow_symlinks() {
-        let dir = std::env::temp_dir().join(format!("uv-bump-atomic-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("floorup-atomic-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
 
@@ -428,11 +428,11 @@ mod tests {
 
         let secret = dir.join("secret");
         fs::write(&secret, "SECRET").unwrap();
-        symlink(&secret, dir.join("pyproject.toml.uv-bump.tmp")).unwrap();
+        symlink(&secret, dir.join("pyproject.toml.floorup.tmp")).unwrap();
         let n = 50_000u64;
         TEMP_SEQ.store(n, Ordering::SeqCst);
         let planted = dir.join(format!(
-            ".plant.toml.uv-bump.{}.{n}.tmp",
+            ".plant.toml.floorup.{}.{n}.tmp",
             std::process::id()
         ));
         symlink(&secret, &planted).unwrap();
@@ -448,7 +448,7 @@ mod tests {
         );
         assert!(planted.symlink_metadata().unwrap().file_type().is_symlink());
         assert!(dir
-            .join("pyproject.toml.uv-bump.tmp")
+            .join("pyproject.toml.floorup.tmp")
             .symlink_metadata()
             .unwrap()
             .file_type()

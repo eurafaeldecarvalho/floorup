@@ -11,7 +11,7 @@ assignees: ""
 ## Command
 
 ```text
-uv-bump --dry-run
+floorup --dry-run
 ```
 
 ## pyproject.toml excerpt

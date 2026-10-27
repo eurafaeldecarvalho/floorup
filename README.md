@@ -1,19 +1,19 @@
-# uv-bump
+# floorup
 
 **Raise every version floor in `pyproject.toml` to the latest PyPI release, in one command, without touching anything else.**
 
-[![CI](https://github.com/eurafaeldecarvalho/uv-bump/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/eurafaeldecarvalho/uv-bump/actions/workflows/ci.yml)
+[![CI](https://github.com/eurafaeldecarvalho/floorup/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/eurafaeldecarvalho/floorup/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 > On FastAPI's real `pyproject.toml`: **90 dependencies bumped in 0.165 s, 0 unrelated diff lines.**
 > Median of 7 cold runs of [`scripts/measure.py`](scripts/measure.py) (wall clock including PyPI lookups, empty cache) on 2026-10-27. [Full diff](docs/fastapi-dry-run.diff).
 
-`uv lock --upgrade` moves your lock file. The bounds you wrote in `pyproject.toml` stay where they were, so a project can say `httpx>=0.23` for years while it actually runs 0.28. uv has no command to fix that yet ([astral-sh/uv#6794](https://github.com/astral-sh/uv/issues/6794), open since August 2024, 537 👍). `uv-bump` fills that gap until uv ships it natively.
+`uv lock --upgrade` moves your lock file. The bounds you wrote in `pyproject.toml` stay where they were, so a project can say `httpx>=0.23` for years while it actually runs 0.28. uv has no command to fix that yet ([astral-sh/uv#6794](https://github.com/astral-sh/uv/issues/6794), open since August 2024, 537 👍). `floorup` fills that gap until uv ships it natively.
 
 ## In 10 seconds
 
 ```console
-$ uv-bump --dry-run
+$ floorup --dry-run
 bumped 5 dependencies in 0.195s; 1 exact pins unchanged
 httpx>=0.23  ->  httpx>=0.28.1  (project.dependencies)
 pydantic>=2.0,<3  ->  pydantic>=2.14.1,<3  (project.dependencies)
@@ -50,37 +50,37 @@ Only version specifiers change. Comments, key order, quoting, spacing and blank 
 Requires Rust 1.88 or newer.
 
 ```sh
-cargo install --locked --git https://github.com/eurafaeldecarvalho/uv-bump
+cargo install --locked --git https://github.com/eurafaeldecarvalho/floorup
 ```
 
-There is no crates.io, PyPI or Homebrew release yet. Note that the `uv-bump` package on PyPI is a different project ([zundertj/uv-bump](https://github.com/zundertj/uv-bump)), so `uvx uv-bump` does not run this tool.
+There is no crates.io, PyPI or Homebrew release yet.
 
 ## Usage
 
 ```sh
-uv-bump                      # bump ./pyproject.toml in place
-uv-bump --dry-run            # print a unified diff, write nothing (-n)
-uv-bump --check              # exit 1 if any bound would change; write nothing
-uv-bump path/to/project      # a pyproject.toml, or a directory containing one
-uv-bump --lock               # write, then run `uv lock`; pyproject.toml is restored if locking fails
+floorup                      # bump ./pyproject.toml in place
+floorup --dry-run            # print a unified diff, write nothing (-n)
+floorup --check              # exit 1 if any bound would change; write nothing
+floorup path/to/project      # a pyproject.toml, or a directory containing one
+floorup --lock               # write, then run `uv lock`; pyproject.toml is restored if locking fails
 
-uv-bump -p requests,flask    # only these packages (--package)
-uv-bump --exclude django     # skip these packages
-uv-bump --group dev          # only these groups: project, dev, an extra, a dependency group, build-system
-uv-bump --exclude-group build-system
+floorup -p requests,flask    # only these packages (--package)
+floorup --exclude django     # skip these packages
+floorup --group dev          # only these groups: project, dev, an extra, a dependency group, build-system
+floorup --exclude-group build-system
 
-uv-bump --bump-pins          # also rewrite exact == pins
-uv-bump --expand-compatible  # let ~= leave its current series
-uv-bump --pre                # consider pre-releases and dev releases
+floorup --bump-pins          # also rewrite exact == pins
+floorup --expand-compatible  # let ~= leave its current series
+floorup --pre                # consider pre-releases and dev releases
 ```
 
 <details>
-<summary>Full <code>uv-bump --help</code></summary>
+<summary>Full <code>floorup --help</code></summary>
 
 ```text
 Bump dependency bounds in pyproject.toml to the latest PyPI releases.
 
-Usage: uv-bump [OPTIONS] [PYPROJECT]
+Usage: floorup [OPTIONS] [PYPROJECT]
 
 Arguments:
   [PYPROJECT]  Path to pyproject.toml, or a directory containing one [default: pyproject.toml]
@@ -119,7 +119,7 @@ Exact pins (==, ===) and upper caps (<, <=) are left in place. >=, >, and ~= mov
 
 **Tables it edits:** `[project] dependencies`, `[project.optional-dependencies]`, `[dependency-groups]`, `[tool.uv] dev-dependencies`, `[build-system] requires`.
 
-| You wrote | uv-bump writes | Why |
+| You wrote | floorup writes | Why |
 | --- | --- | --- |
 | `>=2.28` | `>=2.32.3` (newest release) | Floors move forward |
 | `>2.28` | `>=2.32.3` | Rewritten to `>=` only when the new release is strictly newer and still satisfies the old `>` |
@@ -151,8 +151,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo install --locked --git https://github.com/eurafaeldecarvalho/uv-bump
-      - run: uv-bump --check --verbose
+      - run: cargo install --locked --git https://github.com/eurafaeldecarvalho/floorup
+      - run: floorup --check --verbose
 ```
 
 Exit codes: `0` nothing to change (or written successfully), `1` `--check` found updates, `2` parse error, lookup error, or a failed `uv lock`. Use `--format json` for machine-readable output (counts, every change, skip reasons, and the diff).
@@ -163,7 +163,7 @@ Several people have built tools for the same gap. They make different trade-offs
 
 | Tool | Written in / install | Where new versions come from | Notes from its README (as of 2026-10-27) |
 | --- | --- | --- | --- |
-| **uv-bump** (this) | Rust, `cargo install --git` | PyPI JSON API, directly | No lock file or venv needed. Format-preserving. `--check` for CI. No workspace walk |
+| **floorup** (this) | Rust, `cargo install --git` | PyPI JSON API, directly | No lock file or venv needed. Format-preserving. `--check` for CI. No workspace walk |
 | [zundertj/uv-bump](https://github.com/zundertj/uv-bump) | Python, PyPI `uv-bump` | `uv sync`, then the versions it installed | Floors follow what uv actually resolved. Workspace support. Expects a clean, synced project |
 | [Rezarys/uvbump](https://github.com/Rezarys/uvbump) | Python, PyPI `uv-pyproject-bump` | Package index (PEP 691) | Format-preserving, `--check`, runs `uv lock` by default, `--widen` for caps. Also edits uv constraint/override tables |
 | [Alirex/uv_upgrade](https://github.com/Alirex/uv_upgrade) | Python, PyPI `uv-upx` | `uv.lock` after `uv sync --upgrade` | Workspace support, rollback on failure. Adds floors to unbounded deps unless `--keep-unconstrained` |
@@ -172,22 +172,22 @@ Several people have built tools for the same gap. They make different trade-offs
 | [janusheide/uppd](https://github.com/janusheide/uppd) | Python, PyPI `uppd` | Package index | `pur`-style; operators to update are configurable (default `==`, `<=`, `~=`) |
 | [poetry-plugin-up](https://github.com/MousaZeidBaker/poetry-plugin-up) | Python, Poetry plugin | Poetry | For Poetry projects (`[tool.poetry]` tables) |
 
-The main design choice here: uv-bump reads the index, not a resolver. That makes it fast and independent of your environment, and it means the newest release in range is not checked against the rest of your dependency set. Run `uv lock` (or pass `--lock`) to find out whether everything still resolves.
+The main design choice here: floorup reads the index, not a resolver. That makes it fast and independent of your environment, and it means the newest release in range is not checked against the rest of your dependency set. Run `uv lock` (or pass `--lock`) to find out whether everything still resolves.
 
 ## Limitations
 
-- **No uv workspace walk.** Run it once per member: `uv-bump packages/foo`.
+- **No uv workspace walk.** Run it once per member: `floorup packages/foo`.
 - **`requires-python` is not edited.**
 - **No Poetry tables** (`[tool.poetry.*]`). Use poetry-plugin-up.
 - uv's `constraint-dependencies`, `override-dependencies` and `build-constraint-dependencies` are not edited.
 - **No resolver.** Each package gets its newest eligible release independently. `--lock` runs `uv lock` afterwards and restores `pyproject.toml` if it fails; it does not restore `uv.lock` if uv rewrote it before failing.
 - Talks to the PyPI JSON API (`--index-url` for a mirror; a URL ending in `/simple` is mapped to the sibling `/pypi`). Indexes that only serve the simple API are not supported.
 
-Responses are cached for an hour in `$UV_BUMP_CACHE_DIR`, `$XDG_CACHE_HOME/uv-bump`, or `~/.cache/uv-bump`. `--offline` uses only the cache; `--no-cache` skips it.
+Responses are cached for an hour in `$FLOORUP_CACHE_DIR`, `$XDG_CACHE_HOME/floorup`, or `~/.cache/floorup`. `--offline` uses only the cache; `--no-cache` skips it.
 
 ## Until uv ships this natively
 
-The right long-term home for this is uv itself: [astral-sh/uv#6794](https://github.com/astral-sh/uv/issues/6794). When uv has a native command, use it. uv-bump is a small, separate tool meant to be useful until then. It is not affiliated with Astral.
+The right long-term home for this is uv itself: [astral-sh/uv#6794](https://github.com/astral-sh/uv/issues/6794). When uv has a native command, use it. floorup is a small, separate tool meant to be useful until then. It is not affiliated with Astral.
 
 ## Contributing
 
@@ -195,7 +195,7 @@ Bug reports with a `pyproject.toml` that gets mangled, or a specifier that gets 
 
 ```sh
 cargo test                                   # unit, golden-file, property, and mocked-PyPI tests
-UV_BUMP_PYPI_LIVE=1 cargo test --test live   # hits real PyPI
+FLOORUP_PYPI_LIVE=1 cargo test --test live   # hits real PyPI
 python3 scripts/measure.py                   # the headline number
 ```
 

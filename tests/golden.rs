@@ -4,9 +4,9 @@
 //! The grid tops out at `99.0.0` (see `fixed_test_grid`). Versions in
 //! `tests/fixtures/expected/` are that grid, not current PyPI releases.
 
+use floorup::{bump_str, is_single_specifier, preserves_unrelated_bytes, GridIndex, Options};
 use std::fs;
 use std::path::Path;
-use uv_bump::{bump_str, is_single_specifier, preserves_unrelated_bytes, GridIndex, Options};
 
 fn cases() -> Vec<(&'static str, &'static str)> {
     vec![
@@ -43,7 +43,7 @@ fn cases() -> Vec<(&'static str, &'static str)> {
 
 #[test]
 fn golden_files_match_and_only_specifiers_change() {
-    let update = std::env::var("UV_BUMP_UPDATE_GOLDEN").ok().as_deref() == Some("1");
+    let update = std::env::var("FLOORUP_UPDATE_GOLDEN").ok().as_deref() == Some("1");
     for (input_path, expected_path) in cases() {
         let input = fs::read_to_string(input_path).unwrap_or_else(|err| {
             panic!("read {input_path}: {err}");
@@ -85,7 +85,7 @@ fn golden_files_match_and_only_specifiers_change() {
             continue;
         }
         let expected = fs::read_to_string(expected_path).unwrap_or_else(|err| {
-            panic!("read {expected_path}: {err} (set UV_BUMP_UPDATE_GOLDEN=1 to create it)");
+            panic!("read {expected_path}: {err} (set FLOORUP_UPDATE_GOLDEN=1 to create it)");
         });
         assert_eq!(
             outcome.updated, expected,

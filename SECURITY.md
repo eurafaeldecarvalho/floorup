@@ -1,11 +1,11 @@
 # Security
 
-uv-bump reads a `pyproject.toml`, fetches package metadata, and rewrites version
+floorup reads a `pyproject.toml`, fetches package metadata, and rewrites version
 specifiers in that file. It does not execute dependency code.
 
 ## Reporting a vulnerability
 
-Please use a [private security advisory](https://github.com/eurafaeldecarvalho/uv-bump/security/advisories/new)
+Please use a [private security advisory](https://github.com/eurafaeldecarvalho/floorup/security/advisories/new)
 on this repository. Do not open a public issue for a vulnerability report.
 
 There is no bug bounty and no guaranteed response time.

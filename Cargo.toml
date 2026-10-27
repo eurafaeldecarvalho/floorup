@@ -1,11 +1,11 @@
 [package]
-name = "uv-bump"
+name = "floorup"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT"
 description = "Bump pyproject.toml dependency bounds to the latest PyPI release without touching formatting"
-repository = "https://github.com/eurafaeldecarvalho/uv-bump"
+repository = "https://github.com/eurafaeldecarvalho/floorup"
 readme = "README.md"
 keywords = ["uv", "pyproject", "pypi", "dependencies"]
 categories = ["command-line-utilities", "development-tools"]

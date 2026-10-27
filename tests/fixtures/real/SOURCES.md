@@ -1,7 +1,7 @@
 # Vendored pyproject.toml files
 
 Copied on 2026-10-27 for golden tests. The bytes match those commits.
-Expected output under `tests/fixtures/expected/` is produced by uv-bump against
+Expected output under `tests/fixtures/expected/` is produced by floorup against
 a fixed version grid, not against PyPI, so the versions in the expected files
 are not the upstream versions and not the current PyPI versions.
 

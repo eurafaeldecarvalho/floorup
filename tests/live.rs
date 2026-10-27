@@ -1,15 +1,15 @@
-//! Live PyPI check. Skipped unless `UV_BUMP_PYPI_LIVE=1`.
+//! Live PyPI check. Skipped unless `FLOORUP_PYPI_LIVE=1`.
 //!
 //! ```text
-//! UV_BUMP_PYPI_LIVE=1 cargo test --test live -- --nocapture
+//! FLOORUP_PYPI_LIVE=1 cargo test --test live -- --nocapture
 //! ```
 
-use uv_bump::{bump_str, Options, PypiConfig, PypiIndex, VersionSource};
+use floorup::{bump_str, Options, PypiConfig, PypiIndex, VersionSource};
 
 #[test]
 fn live_requests_lower_bound_moves_to_a_real_release() {
-    if std::env::var("UV_BUMP_PYPI_LIVE").ok().as_deref() != Some("1") {
-        eprintln!("skipping live PyPI test; set UV_BUMP_PYPI_LIVE=1 to run it");
+    if std::env::var("FLOORUP_PYPI_LIVE").ok().as_deref() != Some("1") {
+        eprintln!("skipping live PyPI test; set FLOORUP_PYPI_LIVE=1 to run it");
         return;
     }
     let index = PypiIndex::new(PypiConfig {

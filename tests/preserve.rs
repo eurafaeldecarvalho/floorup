@@ -1,9 +1,9 @@
 //! Property tests: random but valid pyproject files only change specifier bytes.
 
+use floorup::{bump_str, is_single_specifier, preserves_unrelated_bytes, MapIndex, Options};
 use proptest::prelude::*;
 use proptest::test_runner::{Config as ProptestConfig, FileFailurePersistence};
 use std::collections::BTreeSet;
-use uv_bump::{bump_str, is_single_specifier, preserves_unrelated_bytes, MapIndex, Options};
 
 fn arb_name() -> impl Strategy<Value = String> {
     "[a-z][a-z0-9]{0,7}".prop_map(|name| name)

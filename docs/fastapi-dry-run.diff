@@ -1,4 +1,4 @@
-uv-bump --dry-run on tests/fixtures/real/fastapi.toml (FastAPI 79cab5be), run 2026-10-27 against live PyPI.
+floorup --dry-run on tests/fixtures/real/fastapi.toml (FastAPI 79cab5be), run 2026-10-27 against live PyPI.
 Summary: bumped 90 dependencies; 7 already current; 1 without a version bound
 
 --- pyproject.toml

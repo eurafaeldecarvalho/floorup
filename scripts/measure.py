@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Time a cold release run of uv-bump against the vendored FastAPI pyproject.
+"""Time a cold release run of floorup against the vendored FastAPI pyproject.
 
 The clock starts when the release binary is spawned and stops when it exits.
 `cargo build` is not included. The cache directory is empty.
 
 Unrelated lines are difflib opcodes on the two files after every specifier
 token (operator plus version) is replaced with the same placeholder. That
-count does not use uv-bump's edit spans.
+count does not use floorup's edit spans.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests" / "fixtures" / "real" / "fastapi.toml"
-BIN = ROOT / "target" / "release" / "uv-bump"
+BIN = ROOT / "target" / "release" / "floorup"
 
 SPECIFIER = re.compile(r"(?:===|==|!=|~=|<=|>=|<|>)\s*[vV]?[0-9][0-9A-Za-z.*+!_-]*")
 
@@ -72,14 +72,14 @@ def main() -> int:
         return 2
     subprocess.check_call(["cargo", "build", "--release"], cwd=ROOT)
     original = FIXTURE.read_text()
-    with tempfile.TemporaryDirectory(prefix="uv-bump-measure-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="floorup-measure-") as tmp:
         directory = Path(tmp)
         project = directory / "pyproject.toml"
         cache = directory / "cache"
         project.write_text(original)
         cache.mkdir()
         env = os.environ.copy()
-        env["UV_BUMP_CACHE_DIR"] = str(cache)
+        env["FLOORUP_CACHE_DIR"] = str(cache)
         started = time.perf_counter()
         proc = subprocess.run(
             [

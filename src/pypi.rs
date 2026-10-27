@@ -120,7 +120,7 @@ impl PypiIndex {
     pub fn new(config: PypiConfig) -> Result<Self, Error> {
         let client = reqwest::blocking::Client::builder()
             .user_agent(format!(
-                "uv-bump/{} (+https://github.com/eurafaeldecarvalho/uv-bump)",
+                "floorup/{} (+https://github.com/eurafaeldecarvalho/floorup)",
                 env!("CARGO_PKG_VERSION")
             ))
             .timeout(config.timeout)
@@ -419,13 +419,13 @@ pub fn redact(url: &str) -> String {
 }
 
 pub fn default_cache_dir() -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os("UV_BUMP_CACHE_DIR") {
+    if let Some(dir) = std::env::var_os("FLOORUP_CACHE_DIR") {
         return Some(PathBuf::from(dir));
     }
     if let Some(xdg) = std::env::var_os("XDG_CACHE_HOME") {
-        return Some(PathBuf::from(xdg).join("uv-bump"));
+        return Some(PathBuf::from(xdg).join("floorup"));
     }
-    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache").join("uv-bump"))
+    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache").join("floorup"))
 }
 
 fn cache_path(dir: &Path, index: &str, name: &str) -> PathBuf {
@@ -517,7 +517,7 @@ mod tests {
         use std::os::unix::fs::symlink;
 
         let dir =
-            std::env::temp_dir().join(format!("uv-bump-cache-symlink-{}", std::process::id()));
+            std::env::temp_dir().join(format!("floorup-cache-symlink-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let index = PypiIndex::new(PypiConfig {

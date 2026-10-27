@@ -1,5 +1,6 @@
 //! Mocked PyPI JSON server. CI runs this; it does not talk to the network.
 
+use floorup::{bump_str, Options, PypiConfig, PypiIndex, VersionSource};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -7,7 +8,6 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use uv_bump::{bump_str, Options, PypiConfig, PypiIndex, VersionSource};
 
 struct Server {
     url: String,
@@ -122,7 +122,7 @@ fn config(server: &Server, cache: Option<PathBuf>, offline: bool, keep_going: bo
 fn temp_dir(label: &str) -> PathBuf {
     static N: AtomicUsize = AtomicUsize::new(0);
     let dir = std::env::temp_dir().join(format!(
-        "uv-bump-{label}-{}-{}",
+        "floorup-{label}-{}-{}",
         std::process::id(),
         N.fetch_add(1, Ordering::SeqCst)
     ));
@@ -196,7 +196,7 @@ fn cli_dry_run_check_and_write() {
     let original =
         "[project]\nname='t'\nversion='0'\ndependencies=['requests>=2.0.0','missing>=1']\n";
     std::fs::write(&path, original).unwrap();
-    let bin = env!("CARGO_BIN_EXE_uv-bump");
+    let bin = env!("CARGO_BIN_EXE_floorup");
 
     let dry = Command::new(bin)
         .arg(path.as_os_str())
@@ -282,7 +282,7 @@ fn json_dry_run_is_one_document_and_lookup_failure_does_not_write() {
     let path = dir.join("pyproject.toml");
     let original = "[project]\nname='t'\nversion='0'\ndependencies=['requests>=1']\n";
     std::fs::write(&path, original).unwrap();
-    let bin = env!("CARGO_BIN_EXE_uv-bump");
+    let bin = env!("CARGO_BIN_EXE_floorup");
 
     let dry = Command::new(bin)
         .arg(&path)
